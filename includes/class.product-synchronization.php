@@ -1,17 +1,22 @@
 <?php
+ini_set('max_execution_time', '6000'); //10 часов
+set_time_limit(0);
 
 class Webspark_Product_Sync {
 
     const SERVICE_URL = 'https://wp.webspark.dev/wp-api/products';
 
+    const INTERVAL = 'every_15_minutes';
+
     public function __construct() {
 
-        if ( ! wp_next_scheduled( 'webspak_product_sync' ) ) {
-            wp_schedule_event( time(), 'hourly', 'webspak_product_sync' );
+        if ( ! wp_next_scheduled( 'webspark_product_sync' ) ) {
+            wp_schedule_event( time(), 'hourly', 'webspark_product_sync' );
         }
          
-        add_action( 'webspak_product_sync', [$this, 'sync_handler'] );
-
+        add_action( 'webspark_product_sync', [$this, 'sync_handler'] );
+        add_filter( 'cron_schedules', [$this, 'add_cron_recurrence_interval'] );
+        add_action( 'webspark_upload_image', [$this, 'upload_image_handler'], 10, 1 );
     }
 
     public function sync_handler() {
@@ -41,6 +46,7 @@ class Webspark_Product_Sync {
         }
 
         $this->delete_products($new_ids);
+        $this->set_shedule_upload_image(1);
     }
 
     public function delete_products($new_ids) {
@@ -90,7 +96,9 @@ class Webspark_Product_Sync {
         $product->set_stock_quantity( $data['in_stock'] );
         // save media
         add_post_meta( $product->get_id(), '_picture', $data['picture'] );
-        // $img_id = $this->upload_file_by_url( $data['picture'] );
+        // $this->set_shedule_upload_image($product->get_id(), $data['picture']);
+        // $file_name = $this->get_file_name( $data['name'] );
+        // $img_id = $this->upload_image( $data['picture'], $file_name );
         // $product->set_image_id( $img_id );
 
         $product->save();
@@ -99,13 +107,6 @@ class Webspark_Product_Sync {
     }
 
     public function update_product($data, $product) {
-
-        // [sku] => 0f93bbb6-b1b1-4d01-adf6-76e19fffa2a2
-        // [name] => Small Steel Chicken
-        // [description] => The automobile layout consists of a front-engine design, with transaxle-type transmissions mounted at the rear of the engine and four wheel drive
-        // [price] => $858.00
-        // [picture] => https://loremflickr.com/640/480/abstract
-        // [in_stock] => 377
         
         if ( $product->get_name() != $data['name'] ) {
             $product->set_name( $data['name'] ); 
@@ -130,7 +131,9 @@ class Webspark_Product_Sync {
         }
         // save media
         update_post_meta( $product->get_id(), '_picture', $data['picture'] );
-        // $img_id = $this->upload_file_by_url( $data['picture'] );
+        // $this->set_shedule_upload_image($product->get_id(), $data['picture']);
+        // $file_name = $this->get_file_name( $data['name'] );
+        // $img_id = $this->upload_image( $data['picture'], $file_name );
         // $product->set_image_id( $img_id );
 
         $product->save();
@@ -138,63 +141,36 @@ class Webspark_Product_Sync {
         return $product->get_id();
     }
 
-    public function upload_file_by_url( $image_url ) {  
+    public function upload_image($image_url, $filename) {
 
-        // it allows us to use download_url() and wp_handle_sideload() functions
-        require_once( ABSPATH . 'wp-admin/includes/file.php' );
-    
-        // download to temp dir
-        $temp_file = download_url( $image_url );   
-    
-        if ( is_wp_error( $temp_file ) ) {
-            return false;
+        $upload_dir = wp_upload_dir();
+        // $image_data = file_get_contents( $image_url );
+        $image_data = $this->curl_get_method( $image_url );
+        // $filename = basename( $image_url );
+
+        if ( wp_mkdir_p( $upload_dir['path'] ) ) {
+            $file = $upload_dir['path'] . '/' . $filename;
         }
-    
-        // move the temp file into the uploads directory
-        $file = array(
-            'name'     => basename( $image_url ),
-            'type'     => mime_content_type( $temp_file ),
-            'tmp_name' => $temp_file,
-            'size'     => filesize( $temp_file ),
-        );
-        $sideload = wp_handle_sideload(
-            $file,
-            array(
-                'test_form'   => false // no needs to check 'action' parameter
-            )
-        );
-    
-        if ( ! empty( $sideload[ 'error' ] ) ) {
-            // you may return error message if you want
-            return false;
+        else {
+            $file = $upload_dir['basedir'] . '/' . $filename;
         }
-    
-        // it is time to add our uploaded image into WordPress media library
-        $attachment_id = wp_insert_attachment(
-            array(
-                'guid'           => $sideload[ 'url' ],
-                'post_mime_type' => $sideload[ 'type' ],
-                'post_title'     => basename( $sideload[ 'file' ] ),
-                'post_content'   => '',
-                'post_status'    => 'inherit',
-            ),
-            $sideload[ 'file' ]
+
+        file_put_contents( $file, $image_data );
+
+        $wp_filetype = wp_check_filetype( $filename, null );
+        $attachment = array(
+            'post_mime_type' => $wp_filetype['type'],
+            'post_title' => sanitize_file_name( $filename ),
+            'post_content' => '',
+            'post_status' => 'inherit'
         );
-    
-        if ( is_wp_error( $attachment_id ) || ! $attachment_id ) {
-            return false;
-        }
-    
-        // update medatata, regenerate image sizes
+
+        $attach_id = wp_insert_attachment( $attachment, $file );
         require_once( ABSPATH . 'wp-admin/includes/image.php' );
-    
-        wp_update_attachment_metadata(
-            $attachment_id,
-            wp_generate_attachment_metadata( $attachment_id, $sideload[ 'file' ] )
-        );
-    
-        return $attachment_id;
-    
+        $attach_data = wp_generate_attachment_metadata( $attach_id, $file );
+        wp_update_attachment_metadata( $attach_id, $attach_data );
+
+        return $attach_id;
     }
 
     public function curl_get_products($url) {
@@ -211,9 +187,8 @@ class Webspark_Product_Sync {
     public function curl_get_method($url) {
 
         $curl = curl_init();
-        curl_setopt_array(
-            $curl, 
-            array(
+
+        curl_setopt_array($curl, array(
             CURLOPT_URL => $url,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_ENCODING => '',
@@ -223,11 +198,12 @@ class Webspark_Product_Sync {
             CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
             CURLOPT_CUSTOMREQUEST => 'GET',
             CURLOPT_HTTPHEADER => array(
-                    'Cookie: PHPSESSID=60a852838457d96a235d4ffc52762cfb'
-                ),
-            )
-        );
+                'Cookie: PHPSESSID=8acfdd19df7176d772bd80f5ba6e5fc8'
+            ),
+        ));
+
         $response = curl_exec($curl);
+
         curl_close($curl);
 
         return $response;
@@ -288,6 +264,74 @@ class Webspark_Product_Sync {
         }
 
         return true;
+    }
+
+    public function get_file_name($product_name) {
+
+        $prepare_name = preg_replace('/\s+/', '', $product_name);
+
+        return $prepare_name . '.jpg';
+    }
+
+    public function upload_image_handler($page) {
+
+        $args = [
+            'post_type' => 'product', 
+            'paged' => $page,
+        ];
+        $query = new WP_Query( $args ); 
+
+        if ( ! $query->have_posts() ) {
+            wp_clear_scheduled_hook( 'webspark_upload_image', [$page] );
+            wp_clear_scheduled_hook( 'webspark_upload_image' );
+            return false;
+        }
+
+        while ( $query->have_posts() ) {
+            $query->the_post();
+            $product = wc_get_product( $query->post->ID );
+
+            if ( ! $product ) {
+                continue;
+            }
+
+            if ( $product->get_image_id() ) {
+                continue;
+            }
+    
+            $file_name = $this->get_file_name( $product->get_name() ); 
+            $img = get_post_meta( $product->get_id(), '_picture', true );
+            $img_id = $this->upload_image( $img, $file_name );
+    
+            // if ( $img_id && $product->get_image_id() ) {
+            //     wp_delete_attachment( $product->get_image_id(), true );
+            // }
+            
+            if ( $img_id ) {
+                $product->set_image_id( $img_id );
+                $product->save();
+            }
+
+        }
+        wp_reset_postdata();
+        $page++;
+        $this->set_shedule_upload_image($page);
+    }
+
+    public function set_shedule_upload_image($page) {
+
+        wp_clear_scheduled_hook( 'webspark_upload_image', [$page-1] );
+        wp_schedule_event( time(), self::INTERVAL, 'webspark_upload_image', [$page]);
+    }
+
+    public function add_cron_recurrence_interval( $schedules ) {
+ 
+        $schedules[ self::INTERVAL ] = [
+            'interval'  => 900,
+            'display'   => __( 'Every 15 Minutes' )
+        ];
+         
+        return $schedules;
     }
 
 }
