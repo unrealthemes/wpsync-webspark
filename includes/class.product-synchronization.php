@@ -96,10 +96,6 @@ class Webspark_Product_Sync {
         $product->set_stock_quantity( $data['in_stock'] );
         // save media
         add_post_meta( $product->get_id(), '_picture', $data['picture'] );
-        // $this->set_shedule_upload_image($product->get_id(), $data['picture']);
-        // $file_name = $this->get_file_name( $data['name'] );
-        // $img_id = $this->upload_image( $data['picture'], $file_name );
-        // $product->set_image_id( $img_id );
 
         $product->save();
 
@@ -131,10 +127,6 @@ class Webspark_Product_Sync {
         }
         // save media
         update_post_meta( $product->get_id(), '_picture', $data['picture'] );
-        // $this->set_shedule_upload_image($product->get_id(), $data['picture']);
-        // $file_name = $this->get_file_name( $data['name'] );
-        // $img_id = $this->upload_image( $data['picture'], $file_name );
-        // $product->set_image_id( $img_id );
 
         $product->save();
 
@@ -144,9 +136,7 @@ class Webspark_Product_Sync {
     public function upload_image($image_url, $filename) {
 
         $upload_dir = wp_upload_dir();
-        // $image_data = file_get_contents( $image_url );
         $image_data = $this->curl_get_method( $image_url );
-        // $filename = basename( $image_url );
 
         if ( wp_mkdir_p( $upload_dir['path'] ) ) {
             $file = $upload_dir['path'] . '/' . $filename;
@@ -303,9 +293,9 @@ class Webspark_Product_Sync {
             $img = get_post_meta( $product->get_id(), '_picture', true );
             $img_id = $this->upload_image( $img, $file_name );
     
-            // if ( $img_id && $product->get_image_id() ) {
-            //     wp_delete_attachment( $product->get_image_id(), true );
-            // }
+            if ( $img_id && $product->get_image_id() ) {
+                wp_delete_attachment( $product->get_image_id(), true );
+            }
             
             if ( $img_id ) {
                 $product->set_image_id( $img_id );
